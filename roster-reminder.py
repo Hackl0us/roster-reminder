@@ -106,7 +106,7 @@ def send_alert(slack_member_id):
 def remove_roster(slack_member_id):
 	db = sqlite3.connect('db/roster.db')
 	c = db.cursor()
-	c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?",(slack_member_id,))
+	c.execute("DELETE FROM stand_up_roster WHERE slack_member_id = ?",(slack_member_id,))
 	c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?", (slack_member_id,))
 	db.commit()
 	db.close()
@@ -146,7 +146,7 @@ def is_holiday():
 # Slack slash command forces to use POST method
 @app.route('/roster/today', methods=['POST'])
 def api_get_roster():
-	if (not is_holiday()):
+	if not is_holiday():
 		roster = today_roster()
 		send_alert(roster['slack_member_id'])
 		return roster
@@ -167,8 +167,8 @@ def api_remove_roster():
 	return "Done"
 
 @app.route('/task/daily', methods=['PATCH'])
-def api_daily_cleanup():
-	if (not is_holiday()):
+def api_task_daily_cleanup():
+	if not is_holiday():
 		move_to_next_roster(is_stash = False)
 		task_daily_cleanup()
 		return today_roster()
@@ -176,7 +176,7 @@ def api_daily_cleanup():
 		return "Today is not workday, I'll do nothing!"
 
 @app.route('/task/stash-truncate', methods=['DELETE'])
-def api_truncate_stash_table():
+def api_task_truncate_stash_table():
 	task_truncate_stash_table()
 	return "Done"
 	
