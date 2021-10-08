@@ -3,6 +3,12 @@ A reminder for stand-up roster
 
 ## Run the project
 
+### Setup database
+The project use SQLite as database.
+You can create tables refer to `roster.sql`.
+
+The SQLite database file should be named to `roster.db` and place it under `db/` folder.
+
 ### Run with python
 You have to modify the `SLACK_WEBHOOK_URL` variable if you would like to run the project.
 ```shell
