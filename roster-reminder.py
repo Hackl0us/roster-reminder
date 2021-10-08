@@ -22,7 +22,7 @@ def today_roster():
     # Check number of stash_roster
     num_of_stash_roster = c.execute("SELECT COUNT(*) FROM stand_up_roster_stash").fetchone()[0]
     num_of_today_mute_stash_roster = \
-    c.execute("SELECT COUNT(*) FROM stand_up_roster_stash WHERE mute_for_today = 1").fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM stand_up_roster_stash WHERE mute_for_today = 1").fetchone()[0]
 
     # CASE 1: Stash table is not empty & Someone is available
     if (num_of_stash_roster > 0) and (num_of_stash_roster > num_of_today_mute_stash_roster):
@@ -51,12 +51,10 @@ def today_roster():
     return roster
 
 
-def move_to_next_roster(is_stash=False):
+def next_roster(is_stash=False):
     db = sqlite3.connect('db/roster.db')
     c = db.cursor()
 
-    # Get the last roster id
-    last_roster_id = c.execute("SELECT id FROM stand_up_roster ORDER BY id DESC LIMIT 1").fetchone()[0]
     roster = today_roster()
 
     if (is_stash):
@@ -84,28 +82,28 @@ def move_to_next_roster(is_stash=False):
     db.close()
 
 
-def move_flag_to_next_roster(slack_member_id):
+def move_flag_to_next_roster(id):
     db = sqlite3.connect('db/roster.db')
     c = db.cursor()
 
     last_roster_id = c.execute("SELECT id FROM stand_up_roster ORDER BY id DESC LIMIT 1").fetchone()[0]
 
-    if (slack_member_id == last_roster_id):
+    if (id == last_roster_id):
         c.execute(
             "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster ORDER BY id ASC LIMIT 1)")
         db.commit()
     else:
         c.execute(
             "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster WHERE id > ? ORDER BY id LIMIT 1)",
-            (slack_member_id,))
+            (id,))
         db.commit()
 
-    c.execute("UPDATE stand_up_roster SET is_today = 0 WHERE id = ?", (slack_member_id,))
+    c.execute("UPDATE stand_up_roster SET is_today = 0 WHERE id = ?", (id,))
     db.commit()
 
 
-def send_alert(slack_member_id):
-    raw_payload = {"text": "Today\'s Stand-up Roster is <@" + slack_member_id + ">"}
+def send_slack_message(message):
+    raw_payload = {"text": message}
     data = json.dumps(raw_payload)
     data = bytes(data, 'utf8')
 
@@ -114,13 +112,17 @@ def send_alert(slack_member_id):
     request.urlopen(req).read()
 
 
-def remove_roster(slack_member_id):
+def remove_roster():
+    roster = today_roster()
+    move_flag_to_next_roster(roster['id'])
+
     db = sqlite3.connect('db/roster.db')
     c = db.cursor()
-    c.execute("DELETE FROM stand_up_roster WHERE slack_member_id = ?", (slack_member_id,))
-    c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?", (slack_member_id,))
+    c.execute("DELETE FROM stand_up_roster WHERE slack_member_id = ?", (roster['slack_member_id'],))
+    c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?", (roster['slack_member_id'],))
     db.commit()
     db.close()
+    return roster
 
 
 def task_daily_cleanup():
@@ -162,41 +164,45 @@ def is_holiday():
 def api_get_roster():
     if not is_holiday():
         roster = today_roster()
-        send_alert(roster['slack_member_id'])
+        send_slack_message("Today\'s Stand-up Roster is <@" + roster['slack_member_id'] + ">")
         return roster
     else:
-        return "Enjoy your holiday!"
+        return "Please enjoy your holiday! At lease don\'t bother me on my holiday, ok? Don\'t 内卷!"
 
 
 # Slack slash command forces to use POST method
 @app.route('/roster/skip', methods=['POST'])
 def api_stash_roster():
-    move_to_next_roster(is_stash=True)
+    old_roster_name = today_roster()['name']
+    next_roster(is_stash=True)
     roster = today_roster()
-    send_alert(roster['slack_member_id'])
+    send_slack_message(old_roster_name + " has been skipped for today, the new Stand-up Roster is <@" + roster[
+        'slack_member_id'] + ">")
     return roster
 
 
 @app.route('/roster/remove', methods=['DELETE'])
 def api_remove_roster():
-    remove_roster(today_roster()['slack_member_id'])
-    return "Done"
+    roster = remove_roster()
+    send_slack_message("Oh I'm so sad to see " + roster[
+        'name'] + " leave the project. I would cry for whole day... But before I cry, I have to update the roster list!")
+    return roster['name'] + " has been removed from roster db."
 
 
 @app.route('/task/daily', methods=['PATCH'])
 def api_task_daily_cleanup():
     if not is_holiday():
-        move_to_next_roster(is_stash=False)
+        next_roster(is_stash=False)
         task_daily_cleanup()
         return today_roster()
     else:
-        return "Today is not workday, I'll do nothing!"
+        return "Don\'t bother me on holiday!!!! I\'ll do nothing!!"
 
 
 @app.route('/task/stash-truncate', methods=['DELETE'])
 def api_task_truncate_stash_table():
     task_truncate_stash_table()
-    return "Done"
+    return "The stash roster table has been truncated."
 
 
 if __name__ == "__main__":
