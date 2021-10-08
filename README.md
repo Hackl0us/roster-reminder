@@ -14,9 +14,13 @@ python roster-reminder.py
 ```
 
 ### Run in Docker
-You have to specify the `SLACK_WEBHOOK_URL` if you would like to run the project in Docker.
+You have to specify the following environment variables if you would like to run the project in Docker:
+* `TZ`: Timezone. It will affect the judgement on holidays
+* `SLACK_WEBHOOK_URL`: Slack Webhook URL. It can post the message to the corresponding channel / conversation.
+
 ```shell
 docker run -d --name "roster-reminder" \
+-e TZ="Asia/Shanghai" \
 -e SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX" \
 -p 5000:5000 \
 -v /path/to/roster/db:/app/db \
