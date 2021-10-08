@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime
 from urllib import request
 
+db = 'db/roster.db'
+
 slack_webhook_url = os.environ['SLACK_WEBHOOK_URL']
 holiday_api_url = 'http://timor.tech/api/holiday/info/'
 
@@ -14,92 +16,94 @@ app = flask.Flask(__name__)
 app.config["DEBUG"] = False
 
 
+class SQLite:
+    def __init__(self, file='sqlite.db'):
+        self.file = file
+
+    def __enter__(self):
+        self.conn = sqlite3.connect(self.file)
+        self.conn.row_factory = sqlite3.Row
+        return self.conn.cursor()
+
+    def __exit__(self, type, value, traceback):
+        self.conn.commit()
+        self.conn.close()
+
+
 def today_roster():
     roster = dict()
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
 
-    # Check number of stash_roster
-    num_of_stash_roster = c.execute("SELECT COUNT(*) FROM stand_up_roster_stash").fetchone()[0]
-    num_of_today_mute_stash_roster = \
-        c.execute("SELECT COUNT(*) FROM stand_up_roster_stash WHERE mute_for_today = 1").fetchone()[0]
+    with SQLite(db) as c:
 
-    # CASE 1: Stash table is not empty & Someone is available
-    if (num_of_stash_roster > 0) and (num_of_stash_roster > num_of_today_mute_stash_roster):
-        print("CASE 1: Stash table is not empty & Someone is available")
-        result = c.execute("SELECT * FROM stand_up_roster_stash WHERE mute_for_today = 0 ORDER BY id ASC LIMIT 1")
+        # Check number of stash_roster
+        num_of_stash_roster = c.execute("SELECT COUNT(*) FROM stand_up_roster_stash").fetchone()[0]
+        num_of_today_mute_stash_roster = \
+            c.execute("SELECT COUNT(*) FROM stand_up_roster_stash WHERE mute_for_today = 1").fetchone()[0]
 
-        for row in result:
-            roster['id'] = row[0]
-            roster['name'] = row[1]
-            roster['slack_member_id'] = row[2]
-            roster['type'] = "STASH"
-    else:
-        # CASE 2: Stash table is empty || None of stash rosters are available
-        print("CASE 2: Stash table is empty OR None of stash rosters are available")
-        result = c.execute("SELECT * from stand_up_roster WHERE is_today = 1")
+        # CASE 1: Stash table is not empty & Someone is available
+        if (num_of_stash_roster > 0) and (num_of_stash_roster > num_of_today_mute_stash_roster):
+            print("CASE 1: Stash table is not empty & Someone is available")
+            result = c.execute("SELECT * FROM stand_up_roster_stash WHERE mute_for_today = 0 ORDER BY id ASC LIMIT 1")
 
-        for row in result:
-            roster['id'] = row[0]
-            roster['name'] = row[1]
-            roster['slack_member_id'] = row[2]
-            roster['type'] = "NORMAL"
+            for row in result:
+                roster['id'] = row[0]
+                roster['name'] = row[1]
+                roster['slack_member_id'] = row[2]
+                roster['type'] = "STASH"
+        else:
+            # CASE 2: Stash table is empty || None of stash rosters are available
+            print("CASE 2: Stash table is empty OR None of stash rosters are available")
+            result = c.execute("SELECT * from stand_up_roster WHERE is_today = 1")
 
-    db.close()
+            for row in result:
+                roster['id'] = row[0]
+                roster['name'] = row[1]
+                roster['slack_member_id'] = row[2]
+                roster['type'] = "NORMAL"
+
     print("today roster: roster_id:" + str(roster['id']) + ", name: " + roster['name'] + ", slack: " + roster[
         'slack_member_id'] + ", type: " + roster['type'])
     return roster
 
 
 def next_roster(is_stash=False):
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
+    with SQLite(db) as c:
+        roster = today_roster()
 
-    roster = today_roster()
+        if is_stash:
+            if roster['type'] == "STASH":
+                print("BRANCH 1")
+                c.execute("UPDATE stand_up_roster_stash SET mute_for_today = 1 WHERE id = ?", (roster['id'],))
 
-    if (is_stash):
-        if (roster['type'] == "STASH"):
-            print("BRANCH 1")
-            c.execute("UPDATE stand_up_roster_stash SET mute_for_today = 1 WHERE id = ?", (roster['id'],))
-            db.commit()
+            if roster['type'] == "NORMAL":
+                print("BRANCH 2")
+                c.execute("INSERT INTO stand_up_roster_stash (name, slack_member_id, mute_for_today) VALUES (?, ?, 1)",
+                          (roster['name'], roster['slack_member_id']))
+                move_flag_to_next_roster(roster['id'])
+        else:
+            if roster['type'] == "STASH":
+                print("BRANCH 3")
+                c.execute("DELETE FROM stand_up_roster_stash WHERE id = ?", (roster['id'],))
 
-        if (roster['type'] == "NORMAL"):
-            print("BRANCH 2")
-            c.execute("INSERT INTO stand_up_roster_stash (name, slack_member_id, mute_for_today) VALUES (?, ?, 1)",
-                      (roster['name'], roster['slack_member_id']))
-            db.commit()
-            move_flag_to_next_roster(roster['id'])
-    else:
-        if (roster['type'] == "STASH"):
-            print("BRANCH 3")
-            c.execute("DELETE FROM stand_up_roster_stash WHERE id = ?", (roster['id'],))
-            db.commit()
-
-        if (roster['type'] == "NORMAL"):
-            print("BRANCH 4")
-            move_flag_to_next_roster(roster['id'])
-
-    db.close()
+            if roster['type'] == "NORMAL":
+                print("BRANCH 4")
+                move_flag_to_next_roster(roster['id'])
 
 
 def move_flag_to_next_roster(id):
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
+    with SQLite(db) as c:
 
-    last_roster_id = c.execute("SELECT id FROM stand_up_roster ORDER BY id DESC LIMIT 1").fetchone()[0]
+        last_roster_id = c.execute("SELECT id FROM stand_up_roster ORDER BY id DESC LIMIT 1").fetchone()[0]
 
-    if (id == last_roster_id):
-        c.execute(
-            "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster ORDER BY id ASC LIMIT 1)")
-        db.commit()
-    else:
-        c.execute(
-            "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster WHERE id > ? ORDER BY id LIMIT 1)",
-            (id,))
-        db.commit()
+        if id == last_roster_id:
+            c.execute(
+                "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster ORDER BY id ASC LIMIT 1)")
+        else:
+            c.execute(
+                "UPDATE stand_up_roster SET is_today = 1 WHERE id = (SELECT id FROM stand_up_roster WHERE id > ? ORDER BY id LIMIT 1)",
+                (id,))
 
-    c.execute("UPDATE stand_up_roster SET is_today = 0 WHERE id = ?", (id,))
-    db.commit()
+        c.execute("UPDATE stand_up_roster SET is_today = 0 WHERE id = ?", (id,))
 
 
 def send_slack_message(message):
@@ -116,30 +120,21 @@ def remove_roster():
     roster = today_roster()
     move_flag_to_next_roster(roster['id'])
 
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
-    c.execute("DELETE FROM stand_up_roster WHERE slack_member_id = ?", (roster['slack_member_id'],))
-    c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?", (roster['slack_member_id'],))
-    db.commit()
-    db.close()
+    with SQLite(db) as c:
+        c.execute("DELETE FROM stand_up_roster WHERE slack_member_id = ?", (roster['slack_member_id'],))
+        c.execute("DELETE FROM stand_up_roster_stash WHERE slack_member_id = ?", (roster['slack_member_id'],))
     return roster
 
 
 def task_daily_cleanup():
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
-    c.execute("UPDATE stand_up_roster_stash SET mute_for_today = 0")
-    db.commit()
-    db.close()
+    with SQLite(db) as c:
+        c.execute("UPDATE stand_up_roster_stash SET mute_for_today = 0")
 
 
 def task_truncate_stash_table():
-    db = sqlite3.connect('db/roster.db')
-    c = db.cursor()
-    c.execute("DELETE FROM stand_up_roster_stash")
-    c.execute("DELETE FROM sqlite_sequence WHERE name='stand_up_roster_stash'")
-    db.commit()
-    db.close()
+    with SQLite(db) as c:
+        c.execute("DELETE FROM stand_up_roster_stash")
+        c.execute("DELETE FROM sqlite_sequence WHERE name='stand_up_roster_stash'")
 
 
 def is_holiday():
